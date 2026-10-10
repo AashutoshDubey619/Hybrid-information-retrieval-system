@@ -3,9 +3,31 @@ const results = document.querySelector('#results');
 const evaluation = document.querySelector('#evaluation');
 
 async function request(path, options = {}) {
-  const response = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
-  const body = await response.json();
-  if (!response.ok) throw new Error(body.detail || 'Request failed');
+  let response;
+  try {
+    response = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
+  } catch (error) {
+    throw new Error(`Could not reach ${path}: ${error.message}`);
+  }
+
+  const responseText = await response.text();
+  if (!responseText.trim()) {
+    throw new Error(`${path} returned an empty response (HTTP ${response.status}).`);
+  }
+
+  let body;
+  try {
+    body = JSON.parse(responseText);
+  } catch {
+    const isHtml = response.headers.get('content-type')?.includes('text/html') || /^\s*<!doctype html/i.test(responseText);
+    const format = isHtml ? 'an HTML page' : 'a non-JSON response';
+    throw new Error(`${path} returned ${format} (HTTP ${response.status}). Check that the request reaches the backend API.`);
+  }
+
+  if (!response.ok) {
+    const detail = body && typeof body === 'object' && typeof body.detail === 'string' ? body.detail : 'Request failed';
+    throw new Error(`${detail} (HTTP ${response.status})`);
+  }
   return body;
 }
 
