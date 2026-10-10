@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -12,6 +13,7 @@ from indexer import build_index
 from search_engine import SearchEngine
 
 
+logger = logging.getLogger(__name__)
 app = FastAPI(title="Hybrid Information Retrieval System", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 engine = SearchEngine()
@@ -41,11 +43,12 @@ def health() -> dict[str, object]:
 @app.post("/index")
 def index() -> dict:
     try:
+        engine.unload()
         result = build_index()
-        engine._loaded = False
         return {"status": "indexed", **result}
     except Exception as error:
-        raise HTTPException(status_code=500, detail=str(error)) from error
+        logger.exception("Index build failed")
+        raise HTTPException(status_code=500, detail=f"Index build failed: {error}") from error
 
 
 @app.post("/search")
@@ -57,7 +60,8 @@ def search(request: SearchRequest) -> dict:
     except FileNotFoundError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     except Exception as error:
-        raise HTTPException(status_code=500, detail=str(error)) from error
+        logger.exception("Search failed")
+        raise HTTPException(status_code=500, detail=f"Search failed: {error}") from error
 
 
 @app.post("/evaluate")

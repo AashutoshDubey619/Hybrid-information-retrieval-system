@@ -7,12 +7,13 @@ import faiss
 import joblib
 import numpy as np
 from rank_bm25 import BM25Okapi
-from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 
+from embedding_model import get_embedding_model
 from config import (
     ARTIFACTS_DIR,
     DOCUMENTS_FILE,
+    EMBEDDING_BATCH_SIZE,
     EMBEDDING_DIMENSION,
     EMBEDDING_MODEL,
 )
@@ -70,25 +71,36 @@ def build_index(
     )
     tfidf_matrix = vectorizer.fit_transform(corpus.processed_texts)
 
-    model = SentenceTransformer(model_name)
-    embeddings = model.encode(
-        corpus.processed_texts,
-        convert_to_numpy=True,
-        show_progress_bar=False,
-        normalize_embeddings=False,
-    ).astype("float32")
-    if embeddings.ndim != 2 or embeddings.shape[1] != EMBEDDING_DIMENSION:
-        raise ValueError(f"Expected embeddings with dimension {EMBEDDING_DIMENSION}, got {embeddings.shape}")
-    faiss.normalize_L2(embeddings)
+    model = get_embedding_model(model_name)
     index = faiss.IndexFlatIP(EMBEDDING_DIMENSION)
-    index.add(embeddings)
+    for start in range(0, len(corpus.processed_texts), EMBEDDING_BATCH_SIZE):
+        batch_texts = corpus.processed_texts[start : start + EMBEDDING_BATCH_SIZE]
+        embeddings = np.asarray(
+            model.encode(
+                batch_texts,
+                batch_size=EMBEDDING_BATCH_SIZE,
+                convert_to_numpy=True,
+                show_progress_bar=False,
+                normalize_embeddings=False,
+            ),
+            dtype="float32",
+        )
+        if embeddings.ndim != 2 or embeddings.shape[1] != EMBEDDING_DIMENSION:
+            raise ValueError(
+                f"Expected embeddings with dimension {EMBEDDING_DIMENSION}, got {embeddings.shape}"
+            )
+        faiss.normalize_L2(embeddings)
+        index.add(embeddings)
+        del embeddings
 
     joblib.dump(bm25, artifacts_dir / "bm25.pkl")
     joblib.dump(
         {"vectorizer": vectorizer, "matrix": tfidf_matrix},
         artifacts_dir / "tfidf.pkl",
     )
+    del tfidf_matrix
     faiss.write_index(index, str(artifacts_dir / "faiss.index"))
+    del index
     metadata = {
         "documents": corpus.documents,
         "processed_texts": corpus.processed_texts,
@@ -96,4 +108,8 @@ def build_index(
         "embedding_dimension": EMBEDDING_DIMENSION,
     }
     (artifacts_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    return {"document_count": len(corpus.documents), "vocabulary_size": len(vectorizer.vocabulary_), "embedding_shape": list(embeddings.shape)}
+    return {
+        "document_count": len(corpus.documents),
+        "vocabulary_size": len(vectorizer.vocabulary_),
+        "embedding_shape": [len(corpus.documents), EMBEDDING_DIMENSION],
+    }
